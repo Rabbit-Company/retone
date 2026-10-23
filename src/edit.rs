@@ -2,11 +2,35 @@
 
 use crate::hdr10plus::{Hdr10Plus, Severity, T35Kind, classify, misplaced_type};
 use crate::report::{Coded, fail};
-use crate::video::{Found, Source, edit_packet, is_sequence, replace_payload, rewrite, scan, set_hdr10_color};
+use crate::video::{Found, Source, edit_packet, is_sequence, replace_payload, rewrite, scan, scan_with_progress, set_hdr10_color};
 use anyhow::{Context, Result};
 use rabbit_av1::metadata::{ContentLightLevel, MasteringDisplay, Metadata};
 use rabbit_av1::{Obu, ObuKind, Written};
 use std::path::Path;
+
+// What apply, remove and static are doing, for progress reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+  // Reading the input to count its frames and check its colour.
+  Read,
+  // Writing the output.
+  Write,
+  // Reading the output back and decoding it with dav1d.
+  Verify,
+}
+
+impl Stage {
+  pub fn name(self) -> &'static str {
+    match self {
+      Stage::Read => "read",
+      Stage::Write => "write",
+      Stage::Verify => "verify",
+    }
+  }
+}
+
+// Called with the stage, the frames done in it and its total when known.
+pub type StageProgress<'a> = &'a dyn Fn(Stage, u64, Option<u64>);
 
 fn is_hdr10plus(obu: &Obu) -> bool {
   match &obu.kind {
@@ -35,10 +59,11 @@ fn is_hdr10_color(sequence: &rabbit_av1::SequenceHeader) -> bool {
   sequence.color_primaries == 9 && sequence.transfer_characteristics == 16 && sequence.matrix_coefficients == 9
 }
 
-pub struct ApplyOptions {
+pub struct ApplyOptions<'a> {
   pub fix_color: bool,
   pub force_fix_color: bool,
   pub verify: bool,
+  pub progress: StageProgress<'a>,
 }
 
 // --fix-color corrects tags that are missing or wrong on PQ video. Video tagged with another
@@ -88,7 +113,9 @@ fn not_hdr10(sequence: &rabbit_av1::SequenceHeader) -> anyhow::Error {
 }
 
 // Reads the written stream back and lets dav1d decode it.
-fn verify(written: &Written, source: &Source, expected: &[Hdr10Plus]) -> Result<()> {
+fn verify(written: &Written, source: &Source, expected: &[Hdr10Plus], progress: StageProgress) -> Result<()> {
+  let total = Some(expected.len() as u64);
+  progress(Stage::Verify, 0, total);
   let check = Source {
     path: &written.temp,
     ffmpeg: source.ffmpeg,
@@ -109,7 +136,9 @@ fn verify(written: &Written, source: &Source, expected: &[Hdr10Plus]) -> Result<
       return Err(fail("verify_failed", format!("frame {index} does not carry its HDR10+ metadata")));
     }
   }
-  let (decoded, messages) = rabbit_av1::container::decode_messages(&written.temp, source.ffmpeg).map_err(|error| {
+  let decoded =
+    rabbit_av1::container::decode_messages_with_progress(&written.temp, source.ffmpeg, |frames| progress(Stage::Verify, frames, total));
+  let (decoded, messages) = decoded.map_err(|error| {
     if error.kind() == rabbit_av1::ErrorKind::DecoderMissing {
       fail(
         "verify_unavailable",
@@ -129,7 +158,9 @@ fn verify(written: &Written, source: &Source, expected: &[Hdr10Plus]) -> Result<
 }
 
 pub fn apply(source: &Source, output: &Path, metadata: &[Hdr10Plus], options: &ApplyOptions) -> Result<ApplyReport> {
-  let before = scan(source)?;
+  let progress = options.progress;
+  let before = scan_with_progress(source, &|done| progress(Stage::Read, done, None))?;
+  let units = Some(before.temporal_units as u64);
   if before.layered {
     return Err(fail(
       "unsupported_input",
@@ -169,7 +200,7 @@ pub fn apply(source: &Source, output: &Path, metadata: &[Hdr10Plus], options: &A
   }
   let encoded: Vec<Vec<u8>> = metadata.iter().map(|meta| meta.to_metadata().to_obu(None)).collect();
   let mut next = 0usize;
-  let written = rewrite(source, output, |packet, obus, _| {
+  let written = rewrite(source, output, &|done| progress(Stage::Write, done, units), |packet, obus, _| {
     let mut remove = vec![false; obus.len()];
     let mut insert = Vec::new();
     for (index, obu) in obus.iter().enumerate() {
@@ -196,7 +227,7 @@ pub fn apply(source: &Source, output: &Path, metadata: &[Hdr10Plus], options: &A
     edit_packet(packet, &remove, &insert)
   })?;
   let verified = if options.verify {
-    if let Err(error) = verify(&written, source, metadata) {
+    if let Err(error) = verify(&written, source, metadata, progress) {
       written.discard();
       return Err(error);
     }
@@ -229,9 +260,10 @@ pub struct RemoveReport {
   pub static_metadata: usize,
 }
 
-pub fn remove(source: &Source, output: &Path, options: RemoveOptions) -> Result<RemoveReport> {
+// Without a count first, the number of frames is not known while writing.
+pub fn remove(source: &Source, output: &Path, options: RemoveOptions, progress: StageProgress) -> Result<RemoveReport> {
   let mut report = RemoveReport::default();
-  let written = rewrite(source, output, |packet, obus, _| {
+  let written = rewrite(source, output, &|done| progress(Stage::Write, done, None), |packet, obus, _| {
     let remove: Vec<bool> = obus
       .iter()
       .map(|obu| {
@@ -263,10 +295,10 @@ pub struct StaticReport {
   pub color_fixed: bool,
 }
 
-pub fn write_static(source: &Source, output: &Path, options: &StaticOptions) -> Result<StaticReport> {
+pub fn write_static(source: &Source, output: &Path, options: &StaticOptions, progress: StageProgress) -> Result<StaticReport> {
   let mut sequence_headers = 0;
   let mut color_fixed = false;
-  let written = rewrite(source, output, |packet, obus, _| {
+  let written = rewrite(source, output, &|done| progress(Stage::Write, done, None), |packet, obus, _| {
     let mut remove = vec![false; obus.len()];
     let mut insert = Vec::new();
     for (index, obu) in obus.iter().enumerate() {

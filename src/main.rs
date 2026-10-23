@@ -385,6 +385,111 @@ impl Reporter {
   }
 }
 
+// Progress of apply, remove and static, which go through the stream in stages, as regrain
+// reports them. Each stage takes a share of the whole, so `percent` counts for the command:
+// decoding with dav1d to verify takes far longer than reading and writing. Without shares,
+// as for remove and static, which do not count the frames first, `percent` is null.
+struct StreamProgress {
+  mode: Progress,
+  terminal: bool,
+  shares: &'static [(edit::Stage, f64)],
+  started: std::time::Instant,
+  stage: std::cell::Cell<Option<(edit::Stage, std::time::Instant)>>,
+  reported: std::cell::Cell<Option<std::time::Instant>>,
+  shown: std::cell::Cell<bool>,
+}
+
+const WRITE_SHARES: [(edit::Stage, f64); 2] = [(edit::Stage::Read, 50.0), (edit::Stage::Write, 50.0)];
+const VERIFY_SHARES: [(edit::Stage, f64); 3] = [(edit::Stage::Read, 10.0), (edit::Stage::Write, 10.0), (edit::Stage::Verify, 80.0)];
+
+impl StreamProgress {
+  fn new(reporter: &Reporter, command: &str, shares: &'static [(edit::Stage, f64)]) -> StreamProgress {
+    if reporter.json() {
+      event("start", vec![("command", Value::from(command))]);
+    }
+    StreamProgress {
+      mode: reporter.mode,
+      terminal: std::io::IsTerminal::is_terminal(&std::io::stderr()),
+      shares,
+      started: std::time::Instant::now(),
+      stage: std::cell::Cell::new(None),
+      reported: std::cell::Cell::new(None),
+      shown: std::cell::Cell::new(false),
+    }
+  }
+
+  fn report(&self, stage: edit::Stage, done: u64, total: Option<u64>) {
+    let now = std::time::Instant::now();
+    let (stage_started, begins) = match self.stage.get() {
+      Some((current, started)) if current == stage => (started, false),
+      _ => {
+        self.stage.set(Some((stage, now)));
+        (now, true)
+      }
+    };
+    // About twice a second. JSON also gets the start of every stage, so a program sees it
+    // begin, which on a terminal would only print lines without a speed yet.
+    let due = now - self.reported.get().unwrap_or(self.started) >= std::time::Duration::from_millis(500);
+    if !(due || (begins && self.mode == Progress::Json)) || self.mode == Progress::None {
+      return;
+    }
+    self.reported.set(Some(now));
+    let seconds = (now - stage_started).as_secs_f64();
+    let rate = if seconds > 0.0 { done as f64 / seconds } else { 0.0 };
+    let remaining = total
+      .filter(|_| rate > 0.0)
+      .map(|total| (total.saturating_sub(done) as f64 / rate).round() as u64);
+    let before: f64 = self
+      .shares
+      .iter()
+      .take_while(|(current, _)| *current != stage)
+      .map(|(_, share)| share)
+      .sum();
+    let percent = self.shares.iter().find(|(current, _)| *current == stage).map(|(_, own)| {
+      let part = total
+        .filter(|&total| total > 0)
+        .map_or(0.0, |total| done.min(total) as f64 / total as f64);
+      before + own * part
+    });
+    match self.mode {
+      Progress::None => {}
+      Progress::Json => event(
+        "progress",
+        vec![
+          ("stage", Value::from(stage.name())),
+          ("frames", json!(done)),
+          ("total", json!(total)),
+          ("percent", percent.map_or(Value::Null, number)),
+          ("fps", number(rate)),
+          ("elapsed_seconds", number(self.started.elapsed().as_secs_f64())),
+          ("eta_seconds", json!(remaining)),
+        ],
+      ),
+      Progress::Text => {
+        let frames = match total {
+          Some(total) => format!("{done}/{total} frames"),
+          None => format!("{done} frames"),
+        };
+        let percent = percent.map_or_else(String::new, |percent| format!(" ({percent:.0}%)"));
+        let line = format!("{}: {frames}{percent} {rate:.0} fps", stage.name());
+        if self.terminal {
+          eprint!("\r{line}   ");
+        } else {
+          eprintln!("{line}");
+        }
+        self.shown.set(true);
+      }
+    }
+  }
+
+  // Ends the progress line before the result is printed.
+  fn finish(&self) {
+    if self.shown.get() && self.terminal {
+      eprintln!();
+    }
+  }
+}
+
 fn mastering_json(mdcv: &MasteringDisplay) -> Value {
   let [r, g, b] = mdcv.primaries_f64();
   let w = mdcv.white_point_f64();
@@ -766,6 +871,7 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
     } => {
       check_output(&input, &output, overwrite)?;
       let (frames, _) = load_metadata(&metadata, &video)?;
+      let progress = StreamProgress::new(reporter, "apply", if verify { &VERIFY_SHARES } else { &WRITE_SHARES });
       let report = edit::apply(
         &video.source(&input),
         &output,
@@ -774,8 +880,11 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
           fix_color,
           force_fix_color,
           verify,
+          progress: &|stage, done, total| progress.report(stage, done, total),
         },
-      )?;
+      );
+      progress.finish();
+      let report = report?;
       if report.color_fixed {
         reporter.text("Tagged the video as BT.2020 PQ");
       }
@@ -865,7 +974,12 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
         dolby_vision,
         static_metadata,
       };
-      let report = edit::remove(&video.source(&input), &output, options)?;
+      let progress = StreamProgress::new(reporter, "remove", &[]);
+      let report = edit::remove(&video.source(&input), &output, options, &|stage, done, total| {
+        progress.report(stage, done, total)
+      });
+      progress.finish();
+      let report = report?;
       let mut parts = Vec::new();
       if options.hdr10plus {
         parts.push(format!("{} HDR10+", report.hdr10plus));
@@ -912,6 +1026,7 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
           "nothing to write, pass --mastering-display, --max-cll and --max-fall, --cll-from or --fix-color",
         ));
       }
+      let progress = StreamProgress::new(reporter, "static", &[]);
       let report = edit::write_static(
         &video.source(&input),
         &output,
@@ -921,7 +1036,10 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
           mastering_display,
           fix_color,
         },
-      )?;
+        &|stage, done, total| progress.report(stage, done, total),
+      );
+      progress.finish();
+      let report = report?;
       if report.color_fixed {
         reporter.text("Tagged the video as BT.2020 PQ");
       }

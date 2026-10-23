@@ -2,6 +2,16 @@
 
 Error codes, finding codes, JSON field names and the metadata file format stay compatible within a major version. Messages meant for people may change in any release.
 
+## 0.1.3 - 2026-10-23
+
+### Features
+
+- `apply`, `remove` and `static` report progress, as regrain 0.3.2 does. With `--progress json` they begin with a `start` event, and `progress` events name the `stage` they are in: `read` counts the frames for `apply`, `write` writes the output, and `verify` decodes it with dav1d. `frames`, `total`, `fps` and `eta_seconds` are for the stage, and `percent` is for the whole command, with verifying taking 80% of it. `remove` and `static` write without counting first, so their `total` and `percent` are `null`. On a terminal the progress line shows the stage.
+
+### Other changes
+
+- Uses rabbit-av1 0.1.2, whose decoder check reports the frames it has decoded.
+
 ## 0.1.2 - 2026-10-23
 
 ### Changes

@@ -130,6 +130,17 @@ fn measure_apply_export_check_and_remove() {
     let (ok, applied) = events(&["apply", encode, "-m", &metadata, "-o", &tagged, "--verify"]);
     assert!(ok, "{encode}: {applied:?}");
     assert_eq!(event(&applied, "summary")["verified"], true);
+    // Every stage reports when it begins, and verifying ends at the frames it decoded.
+    assert_eq!(applied[0], serde_json::json!({"event": "start", "command": "apply"}));
+    let stages: Vec<&str> = applied
+      .iter()
+      .filter(|event| event["event"] == "progress")
+      .map(|event| event["stage"].as_str().unwrap())
+      .collect();
+    assert_eq!(stages.first(), Some(&"read"), "{applied:?}");
+    assert!(stages.contains(&"write") && stages.contains(&"verify"), "{applied:?}");
+    let verify = applied.iter().find(|event| event["stage"] == "verify").unwrap();
+    assert_eq!((verify["total"].as_u64(), verify["percent"].as_f64()), (Some(48), Some(20.0)));
 
     let exported = path(&dir, "exported.json");
     assert!(retone(&["export", &tagged, "-o", &exported, "-y"]).status.success());
@@ -148,6 +159,12 @@ fn measure_apply_export_check_and_remove() {
     let removed = path(&dir, &format!("removed{index}.{extension}"));
     let (ok, result) = events(&["remove", &tagged, "-o", &removed]);
     assert!(ok, "{result:?}");
+    // remove does not count the frames first, so it has no total or percent.
+    let writing = result.iter().find(|event| event["event"] == "progress").unwrap();
+    assert_eq!(
+      (writing["stage"].as_str(), &writing["total"], &writing["percent"]),
+      (Some("write"), &Value::Null, &Value::Null)
+    );
     assert_eq!(event(&result, "summary")["hdr10plus"], 48);
     let (_, info) = events(&["info", &removed]);
     assert_eq!(event(&info, "summary")["hdr10plus_frames"], 0);

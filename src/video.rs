@@ -126,6 +126,11 @@ pub fn explain(input: &mut Input, error: anyhow::Error) -> anyhow::Error {
 }
 
 pub fn scan(source: &Source) -> Result<Scan> {
+  scan_with_progress(source, &|_| {})
+}
+
+// Like scan, and calls `progress` with the temporal units read so far.
+pub fn scan_with_progress(source: &Source, progress: &dyn Fn(u64)) -> Result<Scan> {
   let mut input = Input::open(source.path, source.ffmpeg, source.fps)?;
   let mut result = Scan { ..Scan::default() };
   let mut parser = StreamParser::new();
@@ -133,6 +138,7 @@ pub fn scan(source: &Source) -> Result<Scan> {
     while let Some(packet) = input.reader.next_packet()? {
       crate::cancel::check()?;
       result.temporal_units += 1;
+      progress(result.temporal_units as u64);
       let seconds = input.reader.timestamp(packet.pts, 1_000_000) as f64 / 1e6;
       let obus = parser
         .parse_packet(&packet.data)
@@ -332,7 +338,14 @@ fn finish_scan(result: &mut Scan) {
 }
 
 // Rewrites every temporal unit with `edit` and writes the result under a temporary name.
-pub fn rewrite(source: &Source, output: &Path, mut edit: impl FnMut(&mut Packet, &[Obu], &StreamParser) -> Result<()>) -> Result<Written> {
+// Writes the input to `output` with every temporal unit passed through `edit`, and calls `progress`
+// with the temporal units written so far.
+pub fn rewrite(
+  source: &Source,
+  output: &Path,
+  progress: &dyn Fn(u64),
+  mut edit: impl FnMut(&mut Packet, &[Obu], &StreamParser) -> Result<()>,
+) -> Result<Written> {
   let mut input = Input::open(source.path, source.ffmpeg, source.fps)?;
   let mut writer = Output::create(output, source.path, &input.reader, source.ffmpeg)?;
   let mut parser = StreamParser::new();
@@ -341,6 +354,7 @@ pub fn rewrite(source: &Source, output: &Path, mut edit: impl FnMut(&mut Packet,
     while let Some(mut packet) = input.reader.next_packet()? {
       crate::cancel::check()?;
       units += 1;
+      progress(units as u64);
       let obus = parser
         .parse_packet(&packet.data)
         .map_err(|error| error.context(format!("temporal unit {units}")))?;

@@ -65,8 +65,8 @@ Download an archive for your system from the [releases page](https://github.com/
 On Linux and macOS:
 
 ```sh
-tar -xzf retone-v0.1.0-linux-x86_64-v3.tar.gz
-sudo install retone-v0.1.0-linux-x86_64-v3/retone /usr/local/bin/
+tar -xzf retone-v0.1.3-linux-x86_64-v3.tar.gz
+sudo install retone-v0.1.3-linux-x86_64-v3/retone /usr/local/bin/
 ```
 
 The macOS binaries are not signed. If macOS refuses to open it, clear the quarantine flag once:
@@ -266,7 +266,7 @@ Shows the HDR formats of an AV1 video, its size and frame rate, colour descripti
 
 ## Errors and JSON output
 
-With `--progress json`, every command writes one JSON object per line to standard output: a `summary` event at the end, `finding`, `scene` and `frame` events where they apply, and an `error` event with a stable `code` when it fails. `measure` and `convert` begin with a `start` event that holds the expected frame count and report `progress` twice a second with `frames`, `total`, `percent`, `fps`, `elapsed_seconds` and `eta_seconds`, as regrain does. Common codes besides those of `check`:
+With `--progress json`, every command writes one JSON object per line to standard output: a `summary` event at the end, `finding`, `scene` and `frame` events where they apply, and an `error` event with a stable `code` when it fails. `measure` and `convert` begin with a `start` event that holds the expected frame count and report `progress` twice a second with `frames`, `total`, `percent`, `fps`, `elapsed_seconds` and `eta_seconds`, as regrain does. `apply`, `remove` and `static` begin with a `start` event and report `progress` with the `stage` they are in: `read` counts the frames for `apply`, `write` writes the output, and `verify` decodes it with dav1d. There `frames`, `total`, `fps` and `eta_seconds` are for the stage, and `percent` is for the whole command, with verifying taking 80% of it. `remove` and `static` do not count the frames first, so their `total` and `percent` are `null`. Common codes besides those of `check`:
 
 | Code                   | Meaning                                                            |
 | ---------------------- | ------------------------------------------------------------------ |
