@@ -2,6 +2,12 @@
 
 Error codes, finding codes, JSON field names and the metadata file format stay compatible within a major version. Messages meant for people may change in any release.
 
+## 0.1.2 - 2026-10-23
+
+### Changes
+
+- `--fix-color` in `apply` and `static` only retags video without a transfer tag, or PQ video with wrong primaries or matrix. Video tagged with another transfer, such as BT.709 SDR, is a different picture that looks washed out as PQ, so it fails with `not_hdr10` unless `--force-fix-color` is given as well. HLG is never retagged.
+
 ## 0.1.1 - 2026-10-23
 
 ### Features

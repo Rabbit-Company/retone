@@ -5,6 +5,8 @@
 #
 #   scripts/conformance.sh <folder> [retone binary]
 #
+# The vectors are mostly SDR, so they are retagged as PQ with --force-fix-color to test the placement.
+#
 # The libaom test vectors are listed in libaom's test/test_vectors.cc and can be
 # downloaded from https://storage.googleapis.com/aom-test-data/<name>.
 set -u
@@ -61,7 +63,7 @@ while IFS= read -r input; do
     fi
     metadata "$frames"
     output="$work/out.$extension"
-    result=$("$retone" --progress json apply "$input" -m "$work/meta.json" -o "$output" --fix-color --verify -y)
+    result=$("$retone" --progress json apply "$input" -m "$work/meta.json" -o "$output" --fix-color --force-fix-color --verify -y)
     if echo "$result" | grep -q '"code":"unsupported_input"'; then
         # Streams with several layers are outside the HDR10+ AV1 specification.
         echo "SKIP $name: $(echo "$result" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')"

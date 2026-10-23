@@ -171,16 +171,17 @@ retone apply <INPUT> -m <METADATA> -o <OUTPUT>
 
 `INPUT` is an AV1 video. `METADATA` is a JSON file from `measure`, `export` or hdr10plus_tool, or an AV1 video whose HDR10+ metadata to copy.
 
-| Option            | Default | Meaning                                                                |
-| ----------------- | ------- | ---------------------------------------------------------------------- |
-| `--fix-color`     | off     | Tag the video as BT.2020 PQ when its colour description says otherwise |
-| `--verify`        | off     | Read the output back and decode it with dav1d before keeping it        |
-| `-y, --overwrite` | off     | Replace an existing output file                                        |
-| `--fps <RATE>`    | stream  | Frame rate for streams without timestamps, such as OBU files           |
+| Option              | Default | Meaning                                                                |
+| ------------------- | ------- | ---------------------------------------------------------------------- |
+| `--fix-color`       | off     | Tag the video as BT.2020 PQ when its colour description says otherwise |
+| `--force-fix-color` | off     | Also retag video tagged with another transfer, such as BT.709 SDR      |
+| `--verify`          | off     | Read the output back and decode it with dav1d before keeping it        |
+| `-y, --overwrite`   | off     | Replace an existing output file                                        |
+| `--fps <RATE>`      | stream  | Frame rate for streams without timestamps, such as OBU files           |
 
 The metadata must have exactly one entry per shown frame, in display order. Every shown frame gets one HDR10+ metadata OBU right before its frame header, as the specification requires, also when the temporal unit holds hidden frames first. Older dav1d versions lose metadata that comes before a hidden frame instead. HDR10+ metadata already in the video is replaced, everything else stays as it was.
 
-HDR10+ needs a video tagged as BT.2020 primaries, PQ transfer and the BT.2020 non-constant luminance matrix. `apply` refuses other tags, since the metadata would describe a different picture than the display shows. Encoders sometimes leave out the tags of a correct PQ encode, ffmpeg's SVT-AV1 wrapper among them. `--fix-color` rewrites the colour description in the sequence header then, without touching anything else.
+HDR10+ needs a video tagged as BT.2020 primaries, PQ transfer and the BT.2020 non-constant luminance matrix. `apply` refuses other tags, since the metadata would describe a different picture than the display shows. Encoders sometimes leave out the tags of a correct PQ encode, ffmpeg's SVT-AV1 wrapper among them. `--fix-color` rewrites the colour description in the sequence header then, without touching anything else. It only retags video without a transfer tag, or PQ video whose primaries or matrix are wrong. A video tagged as BT.709 SDR or another transfer is a different picture, and shown as PQ it looks washed out, so retagging it needs `--force-fix-color` as well. HLG is never retagged.
 
 With `--verify`, retone reads the written video back, checks it like `check` does and compares every frame's metadata, then decodes it with dav1d through ffmpeg, which parses every HDR10+ OBU on the way.
 
@@ -219,6 +220,7 @@ retone static <INPUT> -o <OUTPUT> --mastering-display <DISPLAY> --cll-from <META
 | `--max-fall <CD/M²>`            | Highest frame average brightness, MaxFALL. Needs `--max-cll`           |
 | `--cll-from <METADATA>`         | Take MaxCLL and MaxFALL from HDR10+ metadata, a JSON file or a video   |
 | `--fix-color`                   | Tag the video as BT.2020 PQ when its colour description says otherwise |
+| `--force-fix-color`             | Also retag video tagged with another transfer, such as BT.709 SDR      |
 
 The mastering display is written as x265 and SVT-AV1 take it, `G(0.265,0.69)B(0.15,0.06)R(0.68,0.32)WP(0.3127,0.329)L(1000,0.0001)`, also in x265's integer units, `G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)`. `p3,1000,0.0001` and `bt2020,4000,0.005` name a Display P3 or BT.2020 display with its maximum and minimum luminance.
 

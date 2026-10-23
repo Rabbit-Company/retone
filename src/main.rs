@@ -139,6 +139,9 @@ enum Command {
     /// Tag the video as BT.2020 PQ when its colour description says otherwise
     #[arg(long)]
     fix_color: bool,
+    /// Also retag video tagged with another transfer, such as BT.709 SDR, when its picture is PQ
+    #[arg(long, requires = "fix_color")]
+    force_fix_color: bool,
     /// Read the output back and decode it with dav1d before keeping it
     #[arg(long)]
     verify: bool,
@@ -205,6 +208,9 @@ enum Command {
     /// Tag the video as BT.2020 PQ when its colour description says otherwise
     #[arg(long)]
     fix_color: bool,
+    /// Also retag video tagged with another transfer, such as BT.709 SDR, when its picture is PQ
+    #[arg(long, requires = "fix_color")]
+    force_fix_color: bool,
     /// Overwrite the output file if it exists
     #[arg(short = 'y', long)]
     overwrite: bool,
@@ -753,13 +759,23 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
       output,
       metadata,
       fix_color,
+      force_fix_color,
       verify,
       overwrite,
       video,
     } => {
       check_output(&input, &output, overwrite)?;
       let (frames, _) = load_metadata(&metadata, &video)?;
-      let report = edit::apply(&video.source(&input), &output, &frames, &edit::ApplyOptions { fix_color, verify })?;
+      let report = edit::apply(
+        &video.source(&input),
+        &output,
+        &frames,
+        &edit::ApplyOptions {
+          fix_color,
+          force_fix_color,
+          verify,
+        },
+      )?;
       if report.color_fixed {
         reporter.text("Tagged the video as BT.2020 PQ");
       }
@@ -879,6 +895,7 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
       max_fall,
       cll_from,
       fix_color,
+      force_fix_color,
       overwrite,
       video,
     } => {
@@ -899,6 +916,7 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
         &video.source(&input),
         &output,
         &edit::StaticOptions {
+          force_fix_color,
           content_light,
           mastering_display,
           fix_color,

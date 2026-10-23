@@ -176,7 +176,7 @@ fn apply_refuses_what_it_cannot_write() {
   assert!(!ok);
   assert_eq!(event(&result, "error")["code"], "frame_count_mismatch");
 
-  // A video that is not tagged as PQ.
+  // A video without colour tags, as some encoders leave it.
   let untagged = path(&dir, "untagged.ivf");
   assert!(ffmpeg(&[
     "-i",
@@ -184,7 +184,7 @@ fn apply_refuses_what_it_cannot_write() {
     "-c",
     "copy",
     "-bsf:v",
-    "av1_metadata=color_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
+    "av1_metadata=color_primaries=2:transfer_characteristics=2:matrix_coefficients=2",
     &untagged
   ]));
   let (ok, result) = events(&["apply", &untagged, "-m", &metadata, "-o", &output]);
@@ -200,6 +200,29 @@ fn apply_refuses_what_it_cannot_write() {
     (9.into(), 16.into())
   );
   assert_eq!(picture(&output), picture(&untagged));
+
+  // A video tagged as BT.709 SDR is a different picture, so only --force-fix-color retags it.
+  let sdr = path(&dir, "sdr.ivf");
+  assert!(ffmpeg(&[
+    "-i",
+    &encodes[0],
+    "-c",
+    "copy",
+    "-bsf:v",
+    "av1_metadata=color_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
+    &sdr
+  ]));
+  let retagged = path(&dir, "retagged.ivf");
+  let (ok, result) = events(&["apply", &sdr, "-m", &metadata, "-o", &retagged, "--fix-color"]);
+  assert!(!ok);
+  assert_eq!(event(&result, "error")["code"], "not_hdr10");
+  assert!(event(&result, "error")["message"].as_str().unwrap().contains("--force-fix-color"));
+  let (ok, result) = events(&["apply", &sdr, "-m", &metadata, "-o", &retagged, "--fix-color", "--force-fix-color"]);
+  assert!(ok, "{result:?}");
+  let static_out = path(&dir, "static.ivf");
+  let (ok, result) = events(&["static", &sdr, "-o", &static_out, "--fix-color"]);
+  assert!(!ok);
+  assert_eq!(event(&result, "error")["code"], "not_hdr10");
 
   let (ok, result) = events(&["apply", &encodes[0], "-m", &metadata, "-o", &output]);
   assert!(!ok);

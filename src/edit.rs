@@ -37,7 +37,19 @@ fn is_hdr10_color(sequence: &rabbit_av1::SequenceHeader) -> bool {
 
 pub struct ApplyOptions {
   pub fix_color: bool,
+  pub force_fix_color: bool,
   pub verify: bool,
+}
+
+// --fix-color corrects tags that are missing or wrong on PQ video. Video tagged with another
+// transfer, such as BT.709 SDR, is a different picture and would look washed out as PQ, so
+// retagging it needs --force-fix-color. HLG is never retagged.
+fn refuse_retag(sequence: &rabbit_av1::SequenceHeader, force: bool) -> Option<anyhow::Error> {
+  let transfer = sequence.transfer_characteristics;
+  if sequence.is_hlg() || (!force && transfer != 2 && transfer != 16) {
+    return Some(not_hdr10(sequence));
+  }
+  None
 }
 
 pub struct ApplyReport {
@@ -54,6 +66,16 @@ fn not_hdr10(sequence: &rabbit_av1::SequenceHeader) -> anyhow::Error {
     return fail(
       "not_hdr10",
       "the video is HLG, and HDR10+ needs PQ. --fix-color only corrects the tags of video that is PQ already",
+    );
+  }
+  if sequence.transfer_characteristics != 2 && sequence.transfer_characteristics != 16 {
+    return fail(
+      "not_hdr10",
+      format!(
+        "the video is tagged with transfer {} ({}), not PQ. Tagging SDR video as PQ makes it look washed out, so --fix-color only retags untagged video. Pass --force-fix-color as well when the picture is PQ and only its tags are wrong",
+        sequence.transfer_characteristics,
+        crate::inspect::transfer_name(sequence.transfer_characteristics)
+      ),
     );
   }
   fail(
@@ -120,8 +142,11 @@ pub fn apply(source: &Source, output: &Path, metadata: &[Hdr10Plus], options: &A
     .context("the video has no sequence header")
     .code("invalid_bitstream")?;
   let color_fixed = !is_hdr10_color(&sequence);
-  if color_fixed && (!options.fix_color || sequence.is_hlg()) {
+  if color_fixed && !options.fix_color {
     return Err(not_hdr10(&sequence));
+  }
+  if color_fixed && let Some(error) = refuse_retag(&sequence, options.force_fix_color) {
+    return Err(error);
   }
   if metadata.len() != before.frames.len() {
     return Err(fail(
@@ -227,6 +252,7 @@ pub fn remove(source: &Source, output: &Path, options: RemoveOptions) -> Result<
 }
 
 pub struct StaticOptions {
+  pub force_fix_color: bool,
   pub content_light: Option<ContentLightLevel>,
   pub mastering_display: Option<MasteringDisplay>,
   pub fix_color: bool,
@@ -251,8 +277,11 @@ pub fn write_static(source: &Source, output: &Path, options: &StaticOptions) -> 
       }
       if let ObuKind::Sequence(sequence) = &obu.kind {
         sequence_headers += 1;
-        if options.fix_color && sequence.is_hlg() {
-          return Err(not_hdr10(sequence));
+        if options.fix_color
+          && !is_hdr10_color(sequence)
+          && let Some(error) = refuse_retag(sequence, options.force_fix_color)
+        {
+          return Err(error);
         }
         if options.fix_color && !is_hdr10_color(sequence) {
           let payload = set_hdr10_color(&packet.data[obu.payload.clone()], sequence)?;
