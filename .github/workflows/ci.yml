@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: Check on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install ffmpeg on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg mkvtoolnix
+      - name: Install ffmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg mkvtoolnix
+      - run: cargo fmt --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+
+  hdr10plus-conformance:
+    name: HDR10+ AV1 conformance streams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cargo build --release
+      - name: Download the AOM conformance streams
+        run: |
+          mkdir streams
+          curl -fsSL "https://api.github.com/repos/AOMediaCodec/av1-hdr10plus/git/trees/main?recursive=1" \
+            | python3 -c "import json, sys; [print(t['path']) for t in json.load(sys.stdin)['tree'] if t['path'].startswith('conformance/conformance_files/') and t['path'].endswith(('.obu', '.mp4'))]" \
+            > streams/list.txt
+          while read -r path; do
+            curl -fsSL "https://media.githubusercontent.com/media/AOMediaCodec/av1-hdr10plus/main/$path" -o "streams/$(basename "$path")"
+          done < streams/list.txt
+      - run: scripts/hdr10plus-conformance.sh streams target/release/retone
+
+  conformance:
+    name: AV1 conformance streams
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cargo build --release
+      - name: Download the libaom test vectors
+        run: |
+          mkdir vectors
+          curl -fsSL "https://aomedia.googlesource.com/aom/+/refs/heads/main/test/test_vectors.cc?format=TEXT" | base64 -d \
+            | grep -oE '"av1-[^"]+"' | tr -d '"' | sort -u > vectors/list.txt
+          while read -r name; do curl -fsS "https://storage.googleapis.com/aom-test-data/$name" -o "vectors/$name"; done < vectors/list.txt
+      - run: scripts/conformance.sh vectors target/release/retone
