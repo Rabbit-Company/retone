@@ -230,6 +230,7 @@ fn converts_with_dolby_vision_shots() {
   for input in &inputs {
     let (ok, events) = retone(&["convert", input, "-o", &output, "-y"]);
     assert!(ok, "{input}: {events:?}");
+    assert_eq!(event(&events, "start")["frames"], FRAMES, "{input}");
     let summary = event(&events, "summary");
     assert_eq!(summary["frames"], FRAMES, "{input}");
     assert_eq!(summary["scene_source"], "dolby_vision_shots", "{input}");

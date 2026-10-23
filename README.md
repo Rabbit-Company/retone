@@ -264,7 +264,7 @@ Shows the HDR formats of an AV1 video, its size and frame rate, colour descripti
 
 ## Errors and JSON output
 
-With `--progress json`, every command writes one JSON object per line to standard output: a `summary` event at the end, `finding`, `scene` and `frame` events where they apply, and an `error` event with a stable `code` when it fails. Common codes besides those of `check`:
+With `--progress json`, every command writes one JSON object per line to standard output: a `summary` event at the end, `finding`, `scene` and `frame` events where they apply, and an `error` event with a stable `code` when it fails. `measure` and `convert` begin with a `start` event that holds the expected frame count and report `progress` twice a second with `frames`, `total`, `percent`, `fps`, `elapsed_seconds` and `eta_seconds`, as regrain does. Common codes besides those of `check`:
 
 | Code                   | Meaning                                                            |
 | ---------------------- | ------------------------------------------------------------------ |

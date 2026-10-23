@@ -2,6 +2,12 @@
 
 Error codes, finding codes, JSON field names and the metadata file format stay compatible within a major version. Messages meant for people may change in any release.
 
+## 0.1.1 - 2026-10-23
+
+### Features
+
+- `measure` and `convert` report their progress. With `--progress json` they write a `start` event with the expected frame count and picture size, then a `progress` event twice a second with `frames`, `total`, `percent`, `fps`, `elapsed_seconds` and `eta_seconds`, the same events regrain writes. On a terminal the text progress shows the total and the time left. The total comes from the Dolby Vision metadata for `convert` and from the container for `measure`.
+
 ## 0.1.0 - 2026-10-23
 
 First release.

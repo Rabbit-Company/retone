@@ -603,7 +603,8 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
         threads: threads
           .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
           .max(1),
-        progress: reporter.mode == Progress::Text,
+        progress: reporter.mode,
+        command: "measure",
       };
       let result = measure::measure(&input, &options)?;
       if result.hlg {
@@ -687,7 +688,8 @@ fn run(command: Command, reporter: &Reporter) -> Result<()> {
         threads: threads
           .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
           .max(1),
-        progress: reporter.mode == Progress::Text,
+        progress: reporter.mode,
+        command: "convert",
       };
       // Without shot boundaries the frame count is still checked.
       let result = measure::measure(&measured_path, &options)?;

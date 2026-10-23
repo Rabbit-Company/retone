@@ -2,8 +2,9 @@
 // the conversion to light in cd/m² happens here, so it does not depend on ffmpeg's colour code.
 
 use crate::hdr10plus::{APPLICATION_VERSION, Hdr10Plus, PERCENTAGES_9, Percentile, Window};
-use crate::report::{Coded, fail};
+use crate::report::{Coded, Progress, event, fail, number};
 use anyhow::{Context, Result};
+use serde_json::{Value, json};
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -19,7 +20,9 @@ pub struct Options<'a> {
   // must have exactly these frames.
   pub scene_starts: Option<&'a [bool]>,
   pub threads: usize,
-  pub progress: bool,
+  pub progress: Progress,
+  // The command name for the start event, measure or convert.
+  pub command: &'a str,
 }
 
 pub struct Measured {
@@ -82,6 +85,9 @@ struct Probe {
   height: usize,
   transfer: Transfer,
   full_range: bool,
+  fps: Option<f64>,
+  // The frame count the container states, or its duration times the frame rate.
+  frames: Option<u64>,
 }
 
 pub fn ffprobe_path(ffmpeg: &str) -> String {
@@ -99,7 +105,7 @@ fn probe(path: &Path, ffmpeg: &str, forced: Option<Transfer>) -> Result<Probe> {
   let ffprobe = ffprobe_path(ffmpeg);
   let output = Command::new(&ffprobe)
     .args(["-v", "error", "-select_streams", "V:0", "-show_entries"])
-    .arg("stream=width,height,color_transfer,color_range,color_space,color_primaries")
+    .arg("stream=width,height,color_transfer,color_range,color_space,color_primaries,nb_frames,avg_frame_rate,duration:format=duration")
     .args(["-of", "json"])
     .arg(path)
     .stdin(Stdio::null())
@@ -155,11 +161,26 @@ fn probe(path: &Path, ffmpeg: &str, forced: Option<Transfer>) -> Result<Probe> {
   if width == 0 || height == 0 {
     return Err(fail("unsupported_input", "ffprobe found no picture size"));
   }
+  let fps = text("avg_frame_rate")
+    .split_once('/')
+    .and_then(|(num, den)| Some(num.parse::<f64>().ok()? / den.parse::<f64>().ok()?))
+    .filter(|fps| fps.is_finite() && *fps > 0.0);
+  let duration = [&stream["duration"], &value["format"]["duration"]]
+    .iter()
+    .find_map(|value| value.as_str()?.parse::<f64>().ok())
+    .filter(|seconds| seconds.is_finite() && *seconds > 0.0);
+  let frames = text("nb_frames")
+    .parse::<u64>()
+    .ok()
+    .filter(|&frames| frames > 0)
+    .or_else(|| Some((duration? * fps?).round() as u64));
   Ok(Probe {
     width,
     height,
     transfer,
     full_range: text("color_range") == "pc",
+    fps,
+    frames,
   })
 }
 
@@ -438,6 +459,38 @@ fn analyse(picture: &Picture, tables: &Tables, workers: &mut [Stats], frame: &mu
   }
 }
 
+// Reports frames done, as regrain does: a JSON progress event, or a line that overwrites itself on a terminal.
+fn report_progress(mode: Progress, done: u64, expected: Option<u64>, seconds: f64) {
+  let rate = if seconds > 0.0 { done as f64 / seconds } else { 0.0 };
+  let total = expected.filter(|&total| total > 0).map(|total| total.max(done));
+  let remaining = total
+    .filter(|_| rate > 0.0)
+    .map(|total| ((total - done) as f64 / rate).round() as u64);
+  match mode {
+    Progress::Json => event(
+      "progress",
+      vec![
+        ("frames", json!(done)),
+        ("total", json!(total)),
+        ("percent", json!(total.map(|total| number(done as f64 * 100.0 / total as f64)))),
+        ("fps", number(rate)),
+        ("elapsed_seconds", number(seconds)),
+        ("eta_seconds", json!(remaining)),
+      ],
+    ),
+    Progress::Text => match (total, remaining) {
+      (Some(total), Some(remaining)) => eprint!(
+        "\rMeasured {done}/{total} frames ({}%), {rate:.1} fps, eta {}:{:02}   ",
+        done * 100 / total,
+        remaining / 60,
+        remaining % 60
+      ),
+      _ => eprint!("\rMeasured {done} frames, {rate:.1} fps   "),
+    },
+    Progress::None => {}
+  }
+}
+
 // Half the summed difference of two coarse histograms, from 0 for the same to 1 for no overlap.
 fn distance(a: &[f64; COARSE], b: &[f64; COARSE]) -> f64 {
   a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f64>() / 2.0
@@ -520,7 +573,21 @@ pub fn measure(input: &Path, options: &Options) -> Result<Measured> {
   let mut frames: Vec<Hdr10Plus> = Vec::new();
   let started = std::time::Instant::now();
   let mut last_report = started;
-  let terminal = options.progress && std::io::stderr().is_terminal();
+  let expected = options.scene_starts.map(|starts| starts.len() as u64).or(probe.frames);
+  let terminal = options.progress == Progress::Text && std::io::stderr().is_terminal();
+  if options.progress == Progress::Json {
+    event(
+      "start",
+      vec![
+        ("command", Value::from(options.command)),
+        ("frames", json!(expected)),
+        ("width", json!(width)),
+        ("height", json!(height)),
+        ("fps", json!(probe.fps.map(number))),
+        ("transfer", Value::from(if probe.transfer == Transfer::Hlg { "hlg" } else { "pq" })),
+      ],
+    );
+  }
   let flush = |scene: &mut Vec<FrameValues>, frames: &mut Vec<Hdr10Plus>| {
     if !scene.is_empty() {
       frames.extend(std::iter::repeat_n(scene_metadata(scene), scene.len()));
@@ -554,10 +621,14 @@ pub fn measure(input: &Path, options: &Options) -> Result<Measured> {
     }
     previous = Some(coarse);
     scene.push(frame.values());
-    if terminal && last_report.elapsed().as_millis() >= 500 {
+    if (terminal || options.progress == Progress::Json) && last_report.elapsed().as_millis() >= 500 {
       last_report = std::time::Instant::now();
-      let done = frames.len() + scene.len();
-      eprint!("\rMeasured {done} frames, {:.1} fps", done as f64 / started.elapsed().as_secs_f64());
+      report_progress(
+        options.progress,
+        (frames.len() + scene.len()) as u64,
+        expected,
+        started.elapsed().as_secs_f64(),
+      );
     }
   }
   flush(&mut scene, &mut frames);
@@ -638,6 +709,8 @@ mod tests {
       height: 4,
       transfer: Transfer::Pq,
       full_range: false,
+      fps: None,
+      frames: None,
     };
     let tables = Tables::new(&probe, 1000.0);
     // 10 bit limited range code 509 is PQ 0.508, about 100 cd/m².

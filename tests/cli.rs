@@ -115,6 +115,8 @@ fn measure_apply_export_check_and_remove() {
   let metadata = path(&dir, "meta.json");
   let (ok, measured) = events(&["measure", &source, "-o", &metadata]);
   assert!(ok, "{measured:?}");
+  let start = event(&measured, "start");
+  assert_eq!((start["command"].as_str(), start["frames"].as_u64()), (Some("measure"), Some(48)));
   let summary = event(&measured, "summary");
   assert_eq!(summary["frames"], 48);
   assert_eq!(summary["scenes"], 2, "{summary}");
