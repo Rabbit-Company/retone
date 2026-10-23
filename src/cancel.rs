@@ -18,9 +18,5 @@ pub fn requested() -> bool {
 }
 
 pub fn check() -> anyhow::Result<()> {
-  if requested() {
-    Err(fail("cancelled", "cancelled"))
-  } else {
-    Ok(())
-  }
+  if requested() { Err(fail("cancelled", "cancelled")) } else { Ok(()) }
 }

@@ -1,13 +1,13 @@
 // Reading Dolby Vision metadata (RPUs) frame by frame, in display order, from HEVC, AV1 or an
 // RPU file as dovi_tool writes it.
 
-use crate::report::{fail, Coded};
-use crate::video::{explain, Source};
+use crate::report::{Coded, fail};
+use crate::video::{Source, explain};
 use anyhow::{Context, Result};
 use dolby_vision::rpu::dovi_rpu::DoviRpu;
 use dolby_vision::rpu::extension_metadata::blocks::ExtMetadataBlock;
-use hevc_parser::hevc::NAL_UNSPEC62;
 use hevc_parser::HevcParser;
+use hevc_parser::hevc::NAL_UNSPEC62;
 use rabbit_av1::metadata::Metadata;
 use rabbit_av1::{Input, ObuKind, StreamParser};
 use std::io::Read;

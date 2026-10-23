@@ -1,7 +1,7 @@
 // Reading AV1 video for its HDR metadata, and rewriting it.
 
-use crate::hdr10plus::{classify, misplaced_type, Hdr10Plus, Issue, Severity, T35Kind};
-use crate::report::{fail, Coded};
+use crate::hdr10plus::{Hdr10Plus, Issue, Severity, T35Kind, classify, misplaced_type};
+use crate::report::{Coded, fail};
 use anyhow::Result;
 use rabbit_av1::bits::BitWriter;
 use rabbit_av1::metadata::{ContentLightLevel, MasteringDisplay, Metadata};
